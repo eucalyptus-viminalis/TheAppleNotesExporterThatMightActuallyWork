@@ -136,32 +136,21 @@ def clean_apple_html(body, title=""):
     body = re.sub(r'(<div>)\s*\u00a0\s*', r'\1', body)
     body = re.sub(r'\s*\u00a0\s*(</div>)', r'\1', body)
 
-    # Merge consecutive <div>...<br></div> into one block with <br> line breaks.
-    # Apple Notes uses trailing <br> inside a <div> for soft line breaks (Shift+Enter).
-    # Without merging, each div becomes a separate <p> with paragraph-level spacing.
-    # Phase 1: mark empty paragraph-separator divs so merge won't bridge across them
-    _pm = '\x00PARA\x00'
-    body = re.sub(r'<div>\s*(?:<br\s*/?>)?\s*</div>', _pm, body)
-    # Phase 2: merge consecutive br-ending divs into a single block
-    body = re.sub(r'<br\s*/?>\s*</div>\s*<div>', '<br>\n', body)
-    # Phase 3: remove markers
-    body = body.replace(_pm, '')
-
-    # Merge adjacent identical tags that Apple fragments across characters
-    # e.g. <h1>CO</h1><h1>SC</h1> → <h1>COSC</h1>
-    # e.g. <b>part1</b><b>part2</b> → <b>part1part2</b>
-    for tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'b', 'i', 'u', 'em', 'strong'):
-        body = re.sub(rf'</{tag}>\s*<{tag}>', '', body)
-
-    # Strip trailing <br> before closing block tags
-    body = re.sub(r'<br\s*/?>\s*(</(?:div|li|h[1-6]|p|td|th)>)', r'\1', body)
-
     # Collapse empty inline wrappers: <b><br></b> → <br>,  <b></b> → ""
     body = re.sub(
         r'<(b|i|u|em|strong)>\s*(?:<br\s*/?>)?\s*</\1>',
         lambda m: '<br>' if '<br' in m.group() else '',
         body,
     )
+
+    # Strip trailing <br> before closing block tags (must precede div merge)
+    body = re.sub(r'<br\s*/?>\s*(</(?:div|li|h[1-6]|p|td|th)>)', r'\1', body)
+
+    # Merge adjacent identical tags that Apple fragments across characters
+    # e.g. <h1>CO</h1><h1>SC</h1> → <h1>COSC</h1>
+    # e.g. <b>part1</b><b>part2</b> → <b>part1part2</b>
+    for tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'b', 'i', 'u', 'em', 'strong'):
+        body = re.sub(rf'</{tag}>\s*<{tag}>', '', body)
 
     # Remove duplicate leading title (Apple Notes repeats it in the body)
     if title:
@@ -170,6 +159,17 @@ def clean_apple_html(body, title=""):
             rf'^\s*(?:<div>\s*)?<h1>\s*{title_pat}\s*</h1>(?:\s*</div>)?\s*',
             '', body, count=1,
         )
+
+    # Merge consecutive divs into single blocks with <br> line breaks.
+    # In Apple Notes, each Enter creates a new <div>; only an empty <div><br></div>
+    # (or now <div></div> after br-stripping) signals a true paragraph break.
+    # Phase 1: mark empty paragraph-separator divs so merge won't bridge across them
+    _pm = '\x00PARA\x00'
+    body = re.sub(r'<div>\s*(?:<br\s*/?>)?\s*</div>', _pm, body)
+    # Phase 2: merge all consecutive content divs
+    body = re.sub(r'</div>\s*<div>', '<br>\n', body)
+    # Phase 3: remove markers
+    body = body.replace(_pm, '')
 
     # Remove Apple-specific class attributes
     body = re.sub(r'\s+class="Apple-[^"]*"', '', body)
@@ -192,7 +192,7 @@ def clean_apple_html(body, title=""):
     body = re.sub(r'<div>\s*(?:<br\s*/?>)?\s*</div>', '', body)
 
     # Convert remaining content <div>s to semantic <p>s
-    body = re.sub(r'<div>(.*?)</div>', r'<p>\1</p>', body)
+    body = re.sub(r'<div>(.*?)</div>', r'<p>\1</p>', body, flags=re.DOTALL)
 
     # Remove empty paragraphs
     body = re.sub(r'<p>\s*</p>', '', body)
