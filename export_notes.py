@@ -123,6 +123,30 @@ def safe_filename(name, max_len=80):
 def clean_apple_html(body, title=""):
     """Transform raw Apple Notes HTML into clean, semantic HTML."""
 
+    # Handle Apple Notes Unicode line separators (U+2028) and associated NBSP
+    # Apple uses U+2028 for within-paragraph line breaks; the HTML body sometimes
+    # preserves it and always leaves U+00A0 (NBSP) as a remnant at tag boundaries.
+    body = body.replace('\u2028', '<br>')
+    body = re.sub(
+        r'(</(?:b|i|u|em|strong)>)\s*\u00a0\s*(<(?:b|i|u|em|strong)[\s>])',
+        r'\1<br>\n\2', body,
+    )
+    body = re.sub(r'\u00a0\s*(?=<br)', '', body)
+    body = re.sub(r'(?<=<br>)\s*\u00a0', '', body)
+    body = re.sub(r'(<div>)\s*\u00a0\s*', r'\1', body)
+    body = re.sub(r'\s*\u00a0\s*(</div>)', r'\1', body)
+
+    # Merge consecutive <div>...<br></div> into one block with <br> line breaks.
+    # Apple Notes uses trailing <br> inside a <div> for soft line breaks (Shift+Enter).
+    # Without merging, each div becomes a separate <p> with paragraph-level spacing.
+    # Phase 1: mark empty paragraph-separator divs so merge won't bridge across them
+    _pm = '\x00PARA\x00'
+    body = re.sub(r'<div>\s*(?:<br\s*/?>)?\s*</div>', _pm, body)
+    # Phase 2: merge consecutive br-ending divs into a single block
+    body = re.sub(r'<br\s*/?>\s*</div>\s*<div>', '<br>\n', body)
+    # Phase 3: remove markers
+    body = body.replace(_pm, '')
+
     # Merge adjacent identical tags that Apple fragments across characters
     # e.g. <h1>CO</h1><h1>SC</h1> → <h1>COSC</h1>
     # e.g. <b>part1</b><b>part2</b> → <b>part1part2</b>
