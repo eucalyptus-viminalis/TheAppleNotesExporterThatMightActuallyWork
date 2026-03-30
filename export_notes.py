@@ -191,6 +191,9 @@ def clean_apple_html(body, title=""):
     # Remove blank-line divs: <div><br></div>, <div></div>
     body = re.sub(r'<div>\s*(?:<br\s*/?>)?\s*</div>', '', body)
 
+    # Unwrap divs that directly precede a list (keeps label tight with list)
+    body = re.sub(r'<div>(.*?)</div>\n(<(?:ul|ol)[\s>])', r'\1\n\2', body, flags=re.DOTALL)
+
     # Convert remaining content <div>s to semantic <p>s
     body = re.sub(r'<div>(.*?)</div>', r'<p>\1</p>', body, flags=re.DOTALL)
 
@@ -261,6 +264,10 @@ def to_markdown(title, created, modified, folder, html_body):
             bullets="-",
             strip=["script", "style"],
         )
+        # markdownify inserts blank lines before lists; remove when preceded by
+        # a label line (e.g. "**Structure**") to match Apple Notes' tight layout
+        body_md = re.sub(r'^(\*\*[^*]+\*\*[^\n]*)\n\n((?:\d+\.|[-*+]) )',
+                         r'\1\n\2', body_md, flags=re.MULTILINE)
     else:
         # Simple fallback: strip all HTML tags
         body_md = re.sub(r"<[^>]+>", "", html_body)
