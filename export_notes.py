@@ -27,10 +27,55 @@ from datetime import datetime
 
 # ── Optional dependency ──────────────────────────────────────────────────────
 try:
-    from markdownify import markdownify as html_to_md
+    from markdownify import MarkdownConverter, re_line_with_content
     HAS_MARKDOWNIFY = True
 except ImportError:
     HAS_MARKDOWNIFY = False
+
+
+# ── Custom Markdown converter with configurable list indent ────────────────
+if HAS_MARKDOWNIFY:
+    class AppleNotesConverter(MarkdownConverter):
+        """MarkdownConverter subclass that uses 4-space list indent (Obsidian-friendly)."""
+
+        class DefaultOptions(MarkdownConverter.DefaultOptions):
+            list_indent = 4
+
+        def convert_li(self, el, text, parent_tags):
+            text = (text or '').strip()
+            if not text:
+                return "\n"
+
+            parent = el.parent
+            if parent is not None and parent.name == 'ol':
+                if parent.get("start") and str(parent.get("start")).isnumeric():
+                    start = int(parent.get("start"))
+                else:
+                    start = 1
+                bullet = '%s.' % (start + len(el.find_previous_siblings('li')))
+            else:
+                depth = -1
+                while el:
+                    if el.name == 'ul':
+                        depth += 1
+                    el = el.parent
+                bullets = self.options['bullets']
+                bullet = bullets[depth % len(bullets)]
+            bullet = bullet + ' '
+
+            indent = self.options['list_indent']
+            indent_str = ' ' * indent
+
+            def _indent_for_li(match):
+                line_content = match.group(1)
+                return indent_str + line_content if line_content else ''
+            text = re_line_with_content.sub(_indent_for_li, text)
+
+            text = bullet + text[indent:]
+            return '%s\n' % text
+
+    def html_to_md(html, **options):
+        return AppleNotesConverter(**options).convert(html)
 
 
 # ── Delimiters used to parse AppleScript output ──────────────────────────────
@@ -101,7 +146,6 @@ def parse_notes(raw):
             continue  # malformed / empty note
         folder, title, created, modified, body = parts
         clean_title = " ".join(title.strip().split())  # collapse all whitespace/newlines
-        print(clean_title)
         notes.append({
             "folder":   folder.strip(),
             "title":    clean_title,
