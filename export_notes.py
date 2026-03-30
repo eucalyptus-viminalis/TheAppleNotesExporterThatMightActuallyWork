@@ -181,6 +181,8 @@ def clean_apple_html(body, title=""):
     body = re.sub(r'(?<=<br>)\s*\u00a0', '', body)
     body = re.sub(r'(<div>)\s*\u00a0\s*', r'\1', body)
     body = re.sub(r'\s*\u00a0\s*(</div>)', r'\1', body)
+    # Replace any remaining NBSP with regular space
+    body = body.replace('\u00a0', ' ')
 
     # Collapse empty inline wrappers: <b><br></b> → <br>,  <b></b> → ""
     body = re.sub(
