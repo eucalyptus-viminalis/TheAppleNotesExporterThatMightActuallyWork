@@ -43,8 +43,6 @@ if HAS_MARKDOWNIFY:
 
         def convert_li(self, el, text, parent_tags):
             text = (text or '').strip()
-            if not text:
-                return "\n"
 
             parent = el.parent
             if parent is not None and parent.name == 'ol':
@@ -53,7 +51,11 @@ if HAS_MARKDOWNIFY:
                 else:
                     start = 1
                 bullet = '%s.' % (start + len(el.find_previous_siblings('li')))
+                if not text:
+                    return '%s\n' % bullet
             else:
+                if not text:
+                    return "\n"
                 depth = -1
                 while el:
                     if el.name == 'ul':
@@ -196,6 +198,9 @@ def clean_apple_html(body, title=""):
     for tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'b', 'i', 'u', 'em', 'strong'):
         body = re.sub(rf'</{tag}>\s*<{tag}>', '', body)
 
+    # Convert bold-wrapped URLs to proper links (Apple Notes strips <a> in body HTML)
+    body = re.sub(r'<b>(https?://[^<]+)</b>', r'<a href="\1">\1</a>', body)
+
     # Remove duplicate leading title (Apple Notes repeats it in the body)
     if title:
         title_pat = r'\s+'.join(re.escape(w) for w in title.split())
@@ -308,10 +313,12 @@ def to_markdown(title, created, modified, folder, html_body):
             bullets="-",
             strip=["script", "style"],
         )
-        # markdownify inserts blank lines before lists; remove when preceded by
-        # a label line (e.g. "**Structure**") to match Apple Notes' tight layout
-        body_md = re.sub(r'^(\*\*[^*]+\*\*[^\n]*)\n\n((?:\d+\.|[-*+]) )',
-                         r'\1\n\2', body_md, flags=re.MULTILINE)
+        # markdownify inserts blank lines before lists; tighten when preceded by
+        # a standalone label line (bold text, "Word:", "1)", etc.)
+        # Only matches lines preceded by a blank line or start-of-string,
+        # ensuring we don't tighten the last line of a multi-line paragraph.
+        body_md = re.sub(r'(^|\n\n)([^\n]+)\n\n((?:\d+\.|[-*+]) )',
+                         r'\1\2\n\3', body_md)
     else:
         # Simple fallback: strip all HTML tags
         body_md = re.sub(r"<[^>]+>", "", html_body)
