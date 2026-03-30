@@ -150,6 +150,12 @@ def clean_apple_html(body, title=""):
     # Remove Apple-specific class attributes
     body = re.sub(r'\s+class="Apple-[^"]*"', '', body)
 
+    # Fix Apple's broken nested lists: <li>text</li><ul> → <li>text\n<ul>
+    # (move the nested list inside the preceding <li> instead of after it)
+    body = re.sub(r'</li>\s*(<(?:ul|ol)[\s>])', r'\n\1', body)
+    # Close the <li> after the nested list ends
+    body = re.sub(r'(</(?:ul|ol)>)\s*(?=</(?:ul|ol)>|<li[\s>])', r'\1\n</li>', body)
+
     # Unwrap <div> around block-level elements
     body = re.sub(
         r'<div>\s*(<(?:h[1-6]|ul|ol|table|blockquote|pre)[\s>])', r'\1', body,
