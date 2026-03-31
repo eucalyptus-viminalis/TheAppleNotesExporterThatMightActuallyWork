@@ -14,6 +14,10 @@ Usage:
     python export_notes.py --out ~/Desktop/Notes  # custom output directory
     python export_notes.py --folder "Work"        # only one folder
     python export_notes.py --dry-run              # preview without writing files
+    python export_notes.py --no-frontmatter       # omit YAML front matter
+    python export_notes.py --no-title             # omit # Title heading
+    python export_notes.py --extract-images       # extract images, use ![](path) links
+    python export_notes.py --obsidian-images      # extract images, use ![[]] links
 
 On first run macOS will ask permission for Terminal to control Notes.app — click OK.
 """
@@ -22,6 +26,7 @@ import subprocess
 import re
 import argparse
 import json
+import base64
 from pathlib import Path
 from datetime import datetime
 
@@ -75,6 +80,35 @@ if HAS_MARKDOWNIFY:
 
             text = bullet + text[indent:]
             return '%s\n' % text
+
+        def convert_img(self, el, text, parent_tags):
+            src = el.attrs.get('src', '') or ''
+            if not self.options.get('extract_images') or not src.startswith('data:image/'):
+                return super().convert_img(el, text, parent_tags)
+
+            match = re.match(r'data:image/(\w+);base64,(.+)', src, re.DOTALL)
+            if not match:
+                return super().convert_img(el, text, parent_tags)
+
+            ext = match.group(1)
+            if ext == 'jpeg':
+                ext = 'jpg'
+            b64_data = match.group(2)
+
+            note_title = self.options.get('note_title', 'image')
+            image_list = self.options.get('image_list')
+            idx = len(image_list) + 1
+            filename = f"{safe_filename(note_title)}_{idx}.{ext}"
+
+            image_names = self.options.get('image_names')
+            if image_names is not None:
+                filename = unique_name(image_names, filename)
+
+            image_list.append({'filename': filename, 'data': b64_data, 'ext': ext})
+
+            if self.options.get('obsidian_images'):
+                return f'![[{filename}]]'
+            return f'![](_attachments/{filename})'
 
     def html_to_md(html, **options):
         return AppleNotesConverter(**options).convert(html)
@@ -307,14 +341,25 @@ def wrap_html(title, created, modified, folder, body):
 
 
 # ── Convert HTML body → Markdown with YAML front matter ─────────────────────
-def to_markdown(title, created, modified, folder, html_body):
+def to_markdown(title, created, modified, folder, html_body, *,
+                include_frontmatter=True, include_title=True,
+                extract_images=False, obsidian_images=False, image_names=None):
+    image_list = []
     if HAS_MARKDOWNIFY:
-        body_md = html_to_md(
-            html_body,
+        md_opts = dict(
             heading_style="ATX",
             bullets="-",
             strip=["script", "style"],
         )
+        if extract_images:
+            md_opts.update(
+                extract_images=True,
+                obsidian_images=obsidian_images,
+                note_title=title,
+                image_list=image_list,
+                image_names=image_names,
+            )
+        body_md = html_to_md(html_body, **md_opts)
         # markdownify inserts blank lines before lists; tighten when preceded by
         # a standalone label line (bold text, "Word:", "1)", etc.)
         # Only matches lines preceded by a blank line or start-of-string,
@@ -326,15 +371,20 @@ def to_markdown(title, created, modified, folder, html_body):
         body_md = re.sub(r"<[^>]+>", "", html_body)
         body_md = re.sub(r"\n{3,}", "\n\n", body_md).strip()
 
-    frontmatter = (
-        f"---\n"
-        f"title: \"{title}\"\n"
-        f"folder: \"{folder}\"\n"
-        f"created: \"{created}\"\n"
-        f"modified: \"{modified}\"\n"
-        f"---\n\n"
-    )
-    return frontmatter + f"# {title}\n\n" + body_md.strip() + "\n"
+    parts = []
+    if include_frontmatter:
+        parts.append(
+            f"---\n"
+            f"title: \"{title}\"\n"
+            f"folder: \"{folder}\"\n"
+            f"created: \"{created}\"\n"
+            f"modified: \"{modified}\"\n"
+            f"---\n"
+        )
+    if include_title:
+        parts.append(f"# {title}\n")
+    parts.append(body_md.strip() + "\n")
+    return "\n".join(parts), image_list
 
 
 # ── Deduplicate filenames within a directory ─────────────────────────────────
@@ -351,7 +401,9 @@ def unique_name(used_set, name):
 
 
 # ── Write one note to disk ───────────────────────────────────────────────────
-def write_note(note, out_dir, fmt, used_names):
+def write_note(note, out_dir, fmt, used_names, *,
+               include_frontmatter=True, include_title=True,
+               extract_images=False, obsidian_images=False, image_names=None):
     folder_dir = out_dir / fmt / safe_filename(note["folder"])
     folder_dir.mkdir(parents=True, exist_ok=True)
 
@@ -364,12 +416,27 @@ def write_note(note, out_dir, fmt, used_names):
         content  = wrap_html(note["title"], note["created"], note["modified"],
                              note["folder"], note["html"])
         filepath = folder_dir / f"{base}.html"
+        filepath.write_text(content, encoding="utf-8")
     else:
-        content  = to_markdown(note["title"], note["created"], note["modified"],
-                               note["folder"], note["html"])
+        content, images = to_markdown(
+            note["title"], note["created"], note["modified"],
+            note["folder"], note["html"],
+            include_frontmatter=include_frontmatter,
+            include_title=include_title,
+            extract_images=extract_images,
+            obsidian_images=obsidian_images,
+            image_names=image_names,
+        )
         filepath = folder_dir / f"{base}.md"
+        filepath.write_text(content, encoding="utf-8")
 
-    filepath.write_text(content, encoding="utf-8")
+        if images:
+            attach_dir = folder_dir / "_attachments"
+            attach_dir.mkdir(parents=True, exist_ok=True)
+            for img in images:
+                img_path = attach_dir / img['filename']
+                img_path.write_bytes(base64.b64decode(img['data']))
+
     return filepath
 
 
@@ -396,6 +463,23 @@ def main():
     parser.add_argument(
         "--dry-run", action="store_true",
         help="Fetch notes but don't write files — just print a summary",
+    )
+    parser.add_argument(
+        "--no-frontmatter", action="store_true",
+        help="Omit YAML front matter from Markdown files",
+    )
+    parser.add_argument(
+        "--no-title", action="store_true",
+        help="Omit the '# Title' heading from Markdown files",
+    )
+    img_group = parser.add_mutually_exclusive_group()
+    img_group.add_argument(
+        "--extract-images", action="store_true",
+        help="Extract images to _attachments/, use standard ![](path) links",
+    )
+    img_group.add_argument(
+        "--obsidian-images", action="store_true",
+        help="Extract images to _attachments/, use Obsidian ![[]] links",
     )
     args = parser.parse_args()
 
@@ -431,11 +515,18 @@ def main():
 
     # ── Export ───────────────────────────────────────────────────────────────
     used_names = {}
+    image_names = set()
+    do_extract = args.extract_images or args.obsidian_images
     counts = {fmt: 0 for fmt in formats}
 
     for i, note in enumerate(notes, 1):
         for fmt in formats:
-            write_note(note, out_dir, fmt, used_names)
+            write_note(note, out_dir, fmt, used_names,
+                       include_frontmatter=not args.no_frontmatter,
+                       include_title=not args.no_title,
+                       extract_images=do_extract,
+                       obsidian_images=args.obsidian_images,
+                       image_names=image_names)
             counts[fmt] += 1
         # Progress every 25 notes
         if i % 25 == 0 or i == len(notes):
@@ -454,6 +545,10 @@ def main():
         "total_notes":  len(notes),
         "formats":      formats,
         "folder_filter": args.folder,
+        "include_frontmatter": not args.no_frontmatter,
+        "include_title": not args.no_title,
+        "extract_images": args.extract_images,
+        "obsidian_images": args.obsidian_images,
         "folders":      folders,
         "notes": [
             {"folder": n["folder"], "title": n["title"],
