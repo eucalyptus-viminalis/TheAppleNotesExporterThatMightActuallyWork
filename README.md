@@ -1,36 +1,7 @@
 # The Apple Notes Exporter That Might Actually Work
 
-	And if you don't love me now  
-	You will never love me again  
-	I can still hear you saying  
-	You would never break the chain (never break the chain)
-
 <figure align="center" style="margin: 32px 0;">
-  <div style="
-    background: rgba(30, 30, 35, 0.7);
-    backdrop-filter: blur(24px);
-    -webkit-backdrop-filter: blur(24px);
-    border-radius: 28px;
-    padding: 24px;
-    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
-    border: 0.5px solid rgba(255, 255, 255, 0.2);
-    display: inline-block;
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
-  " 
-  onmouseover="this.style.transform='scale(1.01)'; this.style.boxShadow='0 28px 48px rgba(0,0,0,0.5)';"
-  onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 20px 40px rgba(0,0,0,0.4)';">
-    <div style="
-      background: #000;
-      border-radius: 12px;
-      padding: 12px;
-      box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(255, 255, 255, 0.1);
-    ">
-      <img src="assets/successful-export.png" width="630" alt="terminal screenshot of a successful export" style="border-radius: 0px; display: block; opacity: 0.95;">
-    </div>
-    <figcaption style="margin-top: 12px; padding-bottom: 4px; color: rgba(255, 255, 255, 0.7); font-size: 13px; font-weight: 400; text-align: center; letter-spacing: 0.3px;">
-      <em>⛓️‍💥</em>
-    </figcaption>
-  </div>
+    <img src="assets/successful-export.png" alt="successful-export" width="630">
 </figure>
 
 ## Foreword
