@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-Apple Notes Exporter
-====================
+The Apple Notes Exporter That Might Actually Work
+=================================================
+macOS only — requires Notes.app (macOS 10.15 Catalina or later).
+
 Exports all Apple Notes to HTML and/or Markdown, preserving folder structure.
 
 Requirements (install once):
@@ -120,9 +122,14 @@ FIELD_SEP = "|||F|||"
 
 
 # ── AppleScript: dumps every note as a delimited record ─────────────────────
+def _as_escape(value):
+    """Escape a string for safe interpolation inside an AppleScript double-quoted literal."""
+    return value.replace('\\', '\\\\').replace('"', '\\"')
+
+
 def build_applescript(folder_filter):
     if folder_filter:
-        folder_clause = f'set allFolders to (every folder whose name is "{folder_filter}")'
+        folder_clause = f'set allFolders to (every folder whose name is "{_as_escape(folder_filter)}")'
     else:
         folder_clause = "set allFolders to every folder"
 
