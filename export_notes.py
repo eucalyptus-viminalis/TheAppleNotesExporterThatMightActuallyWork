@@ -281,6 +281,15 @@ def clean_apple_html(body, title=""):
     for tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'b', 'i', 'u', 'em', 'strong'):
         body = re.sub(rf'</{tag}>\s*<{tag}>', '', body)
 
+    # Apple can wrap block headings in inline styling tags (e.g. <b><h2>..</h2></b>),
+    # which creates invalid nesting and confuses markdown conversion.
+    body = re.sub(
+        r'<(b|i|u|em|strong)>\s*(<(h[1-6])[^>]*>.*?</\3>)\s*</\1>',
+        r'\2',
+        body,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
     # Convert URL/domain-only inline wrappers to links.
     # Apple Notes often drops <a> in body HTML while preserving visual styling tags.
     def _linkify_wrapped_url(match):
