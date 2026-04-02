@@ -210,6 +210,46 @@ def safe_filename(name, max_len=80):
 def clean_apple_html(body, title=""):
     """Transform raw Apple Notes HTML into clean, semantic HTML."""
 
+    # Matches full URLs and bare domains commonly auto-linked by Apple Notes.
+    # Purposefully excludes '@' so email addresses are not linkified here.
+    url_text_re = re.compile(
+        r'(?:https?://)?(?:www\.)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/[^\s<]*)?',
+        flags=re.IGNORECASE,
+    )
+
+    def _href_from_text(url_text):
+        text = url_text.strip()
+        if re.match(r'^https?://', text, flags=re.IGNORECASE):
+            return text
+        return f"https://{text}"
+
+    common_tlds = {
+        "com", "net", "org", "edu", "gov", "mil", "int",
+        "io", "co", "ai", "app", "dev", "me", "biz", "info",
+        "us", "uk", "au", "ca", "de", "fr", "jp", "cn", "in", "nz",
+        "sg", "kr", "nl", "se", "no", "fi", "es", "it", "ch",
+    }
+
+    def _is_likely_web_url_or_domain(url_text):
+        text = url_text.strip().strip("()[]{}<>,;:'\"")
+        if not text or "@" in text or " " in text:
+            return False
+        if re.match(r'^https?://', text, flags=re.IGNORECASE):
+            return True
+        if "/" in text:
+            host = text.split("/", 1)[0]
+        else:
+            host = text
+        if "." not in host:
+            return False
+        labels = [p for p in host.split(".") if p]
+        if len(labels) < 2:
+            return False
+        tld = labels[-1].lower()
+        if tld not in common_tlds:
+            return False
+        return bool(re.search(r"[a-z]", labels[-2], flags=re.IGNORECASE))
+
     # Handle Apple Notes Unicode line separators (U+2028) and associated NBSP
     # Apple uses U+2028 for within-paragraph line breaks; the HTML body sometimes
     # preserves it and always leaves U+00A0 (NBSP) as a remnant at tag boundaries.
@@ -241,8 +281,38 @@ def clean_apple_html(body, title=""):
     for tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'b', 'i', 'u', 'em', 'strong'):
         body = re.sub(rf'</{tag}>\s*<{tag}>', '', body)
 
-    # Convert bold-wrapped URLs to proper links (Apple Notes strips <a> in body HTML)
-    body = re.sub(r'<b>(https?://[^<]+)</b>', r'<a href="\1">\1</a>', body)
+    # Convert URL/domain-only inline wrappers to links.
+    # Apple Notes often drops <a> in body HTML while preserving visual styling tags.
+    def _linkify_wrapped_url(match):
+        text = match.group(2).strip()
+        href = _href_from_text(text)
+        return f'<a href="{href}">{text}</a>'
+
+    body = re.sub(
+        rf'<(b|i|u|em|strong)>\s*({url_text_re.pattern})\s*</\1>',
+        _linkify_wrapped_url,
+        body,
+        flags=re.IGNORECASE,
+    )
+
+    # Linkify plain text URL/domain list items (Apple's own auto-linking case),
+    # but only when it's likely an actual web host (conservative TLD check).
+    def _linkify_container_url(match):
+        open_tag = match.group(1)
+        text = match.group(2).strip()
+        maybe_br = match.group(3) or ''
+        close_tag = match.group(4)
+        if not _is_likely_web_url_or_domain(text):
+            return match.group(0)
+        href = _href_from_text(text)
+        return f'{open_tag}<a href="{href}">{text}</a>{maybe_br}{close_tag}'
+
+    body = re.sub(
+        rf'(<(?:li|p|div|span)\b[^>]*>)\s*({url_text_re.pattern})\s*(<br\s*/?>)?\s*(</(?:li|p|div|span)>)',
+        _linkify_container_url,
+        body,
+        flags=re.IGNORECASE,
+    )
 
     # Remove duplicate leading title (Apple Notes repeats it in the body)
     if title:
