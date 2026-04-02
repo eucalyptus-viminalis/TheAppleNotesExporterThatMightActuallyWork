@@ -223,6 +223,50 @@ def clean_apple_html(body, title=""):
             return text
         return f"https://{text}"
 
+    def _heading_joiner(left, right):
+        """Choose spacing when stitching fragmented heading text."""
+        if not left or not right:
+            return ''
+        if left[-1].isspace() or right[0].isspace():
+            return ''
+        if right[0] in '.,;:!?)]}':
+            return ''
+
+        l = left[-1]
+        r = right[0]
+        if l.isdigit() and r.isalpha():
+            return ' '
+        if l.isalpha() and r.isdigit():
+            return ' '
+        if l.islower() and r.isupper():
+            return ' '
+        if l.isupper() and r.isupper():
+            # Acronym followed by title-cased word, e.g. "AWS" + "Pricing".
+            if len(right) > 1 and right[1].islower():
+                return ' '
+            return ''
+        return ''
+
+    def _merge_fragmented_headings(html, allow_br=False):
+        """Merge same-level heading fragments emitted by Apple Notes."""
+        sep = r'(?:\s|<br\s*/?>)*' if allow_br else r'\s*'
+        for tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
+            pattern = re.compile(
+                rf'<{tag}(\s+[^>]*)?>([^<]*)</{tag}>{sep}<{tag}(?:\s+[^>]*)?>([^<]*)</{tag}>',
+                flags=re.IGNORECASE,
+            )
+            while True:
+                def _merge_parts(match):
+                    attrs = match.group(1) or ''
+                    left = match.group(2) or ''
+                    right = match.group(3) or ''
+                    return f'<{tag}{attrs}>{left}{_heading_joiner(left, right)}{right}</{tag}>'
+
+                html, count = pattern.subn(_merge_parts, html)
+                if count == 0:
+                    break
+        return html
+
     common_tlds = {
         "com", "net", "org", "edu", "gov", "mil", "int",
         "io", "co", "ai", "app", "dev", "me", "biz", "info",
@@ -279,16 +323,24 @@ def clean_apple_html(body, title=""):
     # e.g. <h1>CO</h1><h1>SC</h1> → <h1>COSC</h1>
     # e.g. <b>part1</b><b>part2</b> → <b>part1part2</b>
     for tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'b', 'i', 'u', 'em', 'strong'):
-        body = re.sub(rf'</{tag}>\s*<{tag}>', '', body)
+        # Allow attributes on adjacent opening tags, e.g.
+        # </h2><h2 class="Apple-..."> or </b><b style="...">
+        body = re.sub(rf'</{tag}>\s*<{tag}(?:\s+[^>]*)?>', '', body)
+    body = _merge_fragmented_headings(body)
 
-    # Apple can wrap block headings in inline styling tags (e.g. <b><h2>..</h2></b>),
-    # which creates invalid nesting and confuses markdown conversion.
-    body = re.sub(
-        r'<(b|i|u|em|strong)>\s*(<(h[1-6])[^>]*>.*?</\3>)\s*</\1>',
-        r'\2',
-        body,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
+    # Apple can wrap block headings in inline styling tags
+    # (e.g. <b><h2>..</h2></b> or <font><h2>..</h2></font>), which creates
+    # invalid nesting and prevents heading-fragment merging.
+    # Repeat until stable because wrappers can be nested.
+    while True:
+        body, count = re.subn(
+            r'<(b|i|u|em|strong|font|span)(?:\s+[^>]*)?>\s*(<(h[1-6])[^>]*>.*?</\3>)\s*</\1>',
+            r'\2',
+            body,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if count == 0:
+            break
 
     # Convert URL/domain-only inline wrappers to links.
     # Apple Notes often drops <a> in body HTML while preserving visual styling tags.
@@ -370,6 +422,9 @@ def clean_apple_html(body, title=""):
 
     # Remove empty paragraphs
     body = re.sub(r'<p>\s*</p>', '', body)
+
+    # Post-div-merge fix: Apple can also split headings across <br> separators.
+    body = _merge_fragmented_headings(body, allow_br=True)
 
     # Collapse excessive blank lines
     body = re.sub(r'\n{3,}', '\n\n', body)
