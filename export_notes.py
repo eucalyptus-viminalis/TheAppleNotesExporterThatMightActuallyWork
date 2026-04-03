@@ -430,6 +430,32 @@ def clean_apple_html(body, title=""):
     # Post-div-merge fix: Apple can also split headings across <br> separators.
     body = _merge_fragmented_headings(body, allow_br=True)
 
+    # Heading wrappers that were merged through <div> blocks can leave an
+    # artificial line-break directly after the heading. That becomes an empty
+    # hard-break line in Markdown, so drop it.
+    body = re.sub(r'(</h[1-6]>)\s*<br\s*/?>', r'\1', body, flags=re.IGNORECASE)
+
+    # Apple occasionally inserts an inline line separator in the middle of a
+    # list-item sentence (for example before a lower-case continuation word).
+    # Preserve structural breaks like nested lists, but collapse these mid-line
+    # breaks back to spaces.
+    def _collapse_midline_li_breaks(match):
+        content = match.group(1)
+        content = re.sub(
+            r'(?<=\S)\s*<br\s*/?>\s*(?=[a-z\u03b1-\u03c9])',
+            ' ',
+            content,
+            flags=re.IGNORECASE,
+        )
+        return f'<li>{content}</li>'
+
+    body = re.sub(
+        r'<li>(.*?)</li>',
+        _collapse_midline_li_breaks,
+        body,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
     # Collapse excessive blank lines
     body = re.sub(r'\n{3,}', '\n\n', body)
 
@@ -530,6 +556,10 @@ def to_markdown(title, created, modified, folder, html_body, *,
         # Tighten label->list when the label line ends with ":" (including bold labels).
         body_md = re.sub(r'([^\n]*:\*?\*?)\n\n((?:\d+\.|[-*+]) )',
                          r'\1\n\2', body_md)
+        # markdownify also inserts blank lines after headings. Apple Notes renders
+        # section headings tightly with the following content, so keep the source
+        # markdown compact here as well.
+        body_md = re.sub(r'(^|\n)(#{2,6} [^\n]+)\n\n(?=\S)', r'\1\2\n', body_md)
     else:
         # Simple fallback: strip all HTML tags
         body_md = re.sub(r"<[^>]+>", "", html_body)
