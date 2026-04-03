@@ -298,6 +298,7 @@ def clean_apple_html(body, title=""):
     # Apple uses U+2028 for within-paragraph line breaks; the HTML body sometimes
     # preserves it and always leaves U+00A0 (NBSP) as a remnant at tag boundaries.
     body = body.replace('\u2028', '<br>')
+    body = body.replace('\x0c', ' ')  # form feed occasionally appears in Notes text runs
     # Apple can emit malformed HTML entity fragments for quotes: "&quot" (no ';').
     # Normalise these early so downstream HTML->Markdown conversion yields '"'.
     body = re.sub(r'&quot(?!;)', '"', body, flags=re.IGNORECASE)
@@ -488,6 +489,22 @@ def wrap_html(title, created, modified, folder, body):
 def to_markdown(title, created, modified, folder, html_body, *,
                 include_frontmatter=True, include_title=True,
                 extract_images=False, obsidian_images=False, image_names=None):
+    def _preserve_line_indentation(html_text):
+        def _indent_to_nbsp(indent):
+            pieces = []
+            for ch in indent:
+                if ch == '\t':
+                    pieces.append('&nbsp;' * 4)
+                elif ch == ' ':
+                    pieces.append('&nbsp;')
+            return ''.join(pieces)
+
+        return re.sub(
+            r'(<br\s*/?>\n?)([ \t]+)',
+            lambda m: m.group(1) + _indent_to_nbsp(m.group(2)),
+            html_text,
+        )
+
     image_list = []
     if HAS_MARKDOWNIFY:
         md_opts = dict(
@@ -503,13 +520,16 @@ def to_markdown(title, created, modified, folder, html_body, *,
                 image_list=image_list,
                 image_names=image_names,
             )
-        body_md = html_to_md(html_body, **md_opts)
+        body_md = html_to_md(_preserve_line_indentation(html_body), **md_opts)
         # markdownify inserts blank lines before lists; tighten when preceded by
         # a standalone label line (bold text, "Word:", "1)", etc.)
         # Only matches lines preceded by a blank line or start-of-string,
         # ensuring we don't tighten the last line of a multi-line paragraph.
         body_md = re.sub(r'(^|\n\n)([^\n]+)\n\n((?:\d+\.|[-*+]) )',
                          r'\1\2\n\3', body_md)
+        # Tighten label->list when the label line ends with ":" (including bold labels).
+        body_md = re.sub(r'([^\n]*:\*?\*?)\n\n((?:\d+\.|[-*+]) )',
+                         r'\1\n\2', body_md)
     else:
         # Simple fallback: strip all HTML tags
         body_md = re.sub(r"<[^>]+>", "", html_body)
