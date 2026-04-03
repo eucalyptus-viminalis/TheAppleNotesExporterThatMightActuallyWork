@@ -298,6 +298,9 @@ def clean_apple_html(body, title=""):
     # Apple uses U+2028 for within-paragraph line breaks; the HTML body sometimes
     # preserves it and always leaves U+00A0 (NBSP) as a remnant at tag boundaries.
     body = body.replace('\u2028', '<br>')
+    # Apple can emit malformed HTML entity fragments for quotes: "&quot" (no ';').
+    # Normalise these early so downstream HTML->Markdown conversion yields '"'.
+    body = re.sub(r'&quot(?!;)', '"', body, flags=re.IGNORECASE)
     body = re.sub(
         r'(</(?:b|i|u|em|strong)>)\s*\u00a0\s*(<(?:b|i|u|em|strong)[\s>])',
         r'\1<br>\n\2', body,
