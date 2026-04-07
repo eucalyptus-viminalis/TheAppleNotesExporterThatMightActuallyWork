@@ -224,6 +224,26 @@ def clean_apple_html(body, title=""):
             return text
         return f"https://{text}"
 
+    def _split_trailing_url_punctuation(url_text):
+        text = url_text
+        trailing = ''
+        while text:
+            ch = text[-1]
+            if ch in '.,;:!?':
+                trailing = ch + trailing
+                text = text[:-1]
+                continue
+            if ch == ')' and text.count('(') < text.count(')'):
+                trailing = ch + trailing
+                text = text[:-1]
+                continue
+            if ch == ']' and text.count('[') < text.count(']'):
+                trailing = ch + trailing
+                text = text[:-1]
+                continue
+            break
+        return text, trailing
+
     inline_url_re = re.compile(
         rf'(?<![\w@/])({url_text_re.pattern})(?![\w/])',
         flags=re.IGNORECASE,
@@ -316,10 +336,11 @@ def clean_apple_html(body, title=""):
 
         def _replace(match):
             candidate = match.group(1)
-            if not _is_likely_web_url_or_domain(candidate):
+            core, trailing = _split_trailing_url_punctuation(candidate)
+            if not _is_likely_web_url_or_domain(core):
                 return candidate
-            href = _href_from_text(candidate)
-            return f'<a href="{href}">{candidate}</a>'
+            href = _href_from_text(core)
+            return f'<a href="{href}">{core}</a>{trailing}'
 
         text = inline_url_re.sub(_replace, text)
         for token, replacement in email_tokens.items():
@@ -407,8 +428,11 @@ def clean_apple_html(body, title=""):
     # Apple Notes often drops <a> in body HTML while preserving visual styling tags.
     def _linkify_wrapped_url(match):
         text = match.group(2).strip()
-        href = _href_from_text(text)
-        return f'<a href="{href}">{text}</a>'
+        core, trailing = _split_trailing_url_punctuation(text)
+        if not _is_likely_web_url_or_domain(core):
+            return match.group(0)
+        href = _href_from_text(core)
+        return f'<a href="{href}">{core}</a>{trailing}'
 
     body = re.sub(
         rf'<(b|i|u|em|strong)>\s*({url_text_re.pattern})\s*</\1>',
@@ -424,10 +448,11 @@ def clean_apple_html(body, title=""):
         text = match.group(2).strip()
         maybe_br = match.group(3) or ''
         close_tag = match.group(4)
-        if not _is_likely_web_url_or_domain(text):
+        core, trailing = _split_trailing_url_punctuation(text)
+        if not _is_likely_web_url_or_domain(core):
             return match.group(0)
-        href = _href_from_text(text)
-        return f'{open_tag}<a href="{href}">{text}</a>{maybe_br}{close_tag}'
+        href = _href_from_text(core)
+        return f'{open_tag}<a href="{href}">{core}</a>{trailing}{maybe_br}{close_tag}'
 
     body = re.sub(
         rf'(<(?:li|p|div|span)\b[^>]*>)\s*({url_text_re.pattern})\s*(<br\s*/?>)?\s*(</(?:li|p|div|span)>)',
@@ -703,6 +728,17 @@ def to_markdown(title, created, modified, folder, html_body, *,
             markdown_text,
         )
 
+    def _escape_plain_bracket_literals(markdown_text):
+        def _replace(match):
+            literal = match.group(1)
+            return literal.replace('[', r'\[').replace(']', r'\]')
+
+        return re.sub(
+            r'(?<![!\\])(\[[^\]\n]+\])(?!\()',
+            _replace,
+            markdown_text,
+        )
+
     image_list = []
     if HAS_MARKDOWNIFY:
         md_opts = dict(
@@ -741,6 +777,7 @@ def to_markdown(title, created, modified, folder, html_body, *,
         body_md = re.sub(r'(^|\n)(#{2,6} [^\n]+)\n\n(?=\S)', r'\1\2\n', body_md)
         body_md = re.sub(r'<(\[[^]]+\]\(mailto:[^)]+\))>', r'\1', body_md)
         body_md = _escape_non_html_angle_placeholders(body_md)
+        body_md = _escape_plain_bracket_literals(body_md)
         if table_tokens:
             body_md = _restore_tables(body_md, table_tokens)
         if inline_image_tokens:
