@@ -29,6 +29,7 @@ import re
 import argparse
 import json
 import base64
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -582,6 +583,27 @@ def to_markdown(title, created, modified, folder, html_body, *,
             html_text,
         )
 
+    def _tokenize_inline_data_images(html_text):
+        tokens = {}
+
+        def _replace(match):
+            token = f"__APPLE_NOTES_INLINE_IMAGE_{len(tokens)}__"
+            tokens[token] = match.group(1)
+            return f'src="{token}"'
+
+        tokenized = re.sub(
+            r'src="(data:image/[^"]+)"',
+            _replace,
+            html_text,
+            flags=re.IGNORECASE,
+        )
+        return tokenized, tokens
+
+    def _restore_inline_data_images(markdown_text, tokens):
+        for token, data_uri in tokens.items():
+            markdown_text = markdown_text.replace(f"]({token})", f"]({data_uri})")
+        return markdown_text
+
     image_list = []
     if HAS_MARKDOWNIFY:
         md_opts = dict(
@@ -589,6 +611,8 @@ def to_markdown(title, created, modified, folder, html_body, *,
             bullets="-",
             strip=["script", "style"],
         )
+        prepared_html = _preserve_line_indentation(html_body)
+        inline_image_tokens = {}
         if extract_images:
             md_opts.update(
                 extract_images=True,
@@ -597,7 +621,10 @@ def to_markdown(title, created, modified, folder, html_body, *,
                 image_list=image_list,
                 image_names=image_names,
             )
-        body_md = html_to_md(_preserve_line_indentation(html_body), **md_opts)
+        else:
+            prepared_html, inline_image_tokens = _tokenize_inline_data_images(prepared_html)
+
+        body_md = html_to_md(prepared_html, **md_opts)
         # markdownify inserts blank lines before lists; tighten when preceded by
         # a standalone label line (bold text, "Word:", "1)", etc.)
         # Only matches lines preceded by a blank line or start-of-string,
@@ -611,6 +638,8 @@ def to_markdown(title, created, modified, folder, html_body, *,
         # section headings tightly with the following content, so keep the source
         # markdown compact here as well.
         body_md = re.sub(r'(^|\n)(#{2,6} [^\n]+)\n\n(?=\S)', r'\1\2\n', body_md)
+        if inline_image_tokens:
+            body_md = _restore_inline_data_images(body_md, inline_image_tokens)
     else:
         # Simple fallback: strip all HTML tags
         body_md = re.sub(r"<[^>]+>", "", html_body)
@@ -726,6 +755,10 @@ def main():
         "--obsidian-images", action="store_true",
         help="Extract images to _attachments/, use Obsidian ![[]] links",
     )
+    parser.add_argument(
+        "--timings", action="store_true",
+        help="Print timing information for fetch, parse, and export stages",
+    )
     args = parser.parse_args()
 
     out_dir = Path(args.out).expanduser().resolve()
@@ -740,8 +773,13 @@ def main():
     if args.folder:
         print(f"   Folder filter: {args.folder!r}")
 
-    raw   = fetch_notes_raw(args.folder)
+    fetch_started = time.perf_counter()
+    raw = fetch_notes_raw(args.folder)
+    fetch_elapsed = time.perf_counter() - fetch_started
+
+    parse_started = time.perf_counter()
     notes = parse_notes(raw)
+    parse_elapsed = time.perf_counter() - parse_started
 
     if not notes:
         print("⚠️  No notes found.")
@@ -763,8 +801,11 @@ def main():
     image_names = set()
     do_extract = args.extract_images or args.obsidian_images
     counts = {fmt: 0 for fmt in formats}
+    export_started = time.perf_counter()
+    per_note_timings = []
 
     for i, note in enumerate(notes, 1):
+        note_started = time.perf_counter()
         for fmt in formats:
             write_note(note, out_dir, fmt, used_names,
                        include_frontmatter=not args.no_frontmatter,
@@ -773,9 +814,14 @@ def main():
                        obsidian_images=args.obsidian_images,
                        image_names=image_names)
             counts[fmt] += 1
+        note_elapsed = time.perf_counter() - note_started
+        if args.timings:
+            per_note_timings.append((note_elapsed, note["folder"], note["title"]))
         # Progress every 25 notes
         if i % 25 == 0 or i == len(notes):
             print(f"   {i}/{len(notes)} notes processed…", end="\r")
+
+    export_elapsed = time.perf_counter() - export_started
 
     print()
     print(f"\n✅ Export complete → {out_dir}")
@@ -804,6 +850,19 @@ def main():
     manifest_path = out_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(f"   Manifest written: manifest.json")
+
+    if args.timings:
+        total_elapsed = fetch_elapsed + parse_elapsed + export_elapsed
+        print("\n⏱️  Timings")
+        print(f"   Fetch Notes.app data: {fetch_elapsed:.2f}s")
+        print(f"   Parse + clean note HTML: {parse_elapsed:.2f}s")
+        print(f"   Render + write exported files: {export_elapsed:.2f}s")
+        print(f"   Total measured time: {total_elapsed:.2f}s")
+
+        if per_note_timings:
+            print("   Slowest notes:")
+            for elapsed, folder, title in sorted(per_note_timings, reverse=True)[:5]:
+                print(f"   - {elapsed:.2f}s  [{folder}] {title}")
 
 
 if __name__ == "__main__":
