@@ -228,6 +228,9 @@ def clean_apple_html(body, title=""):
         rf'(?<![\w@/])({url_text_re.pattern})(?![\w/])',
         flags=re.IGNORECASE,
     )
+    email_text_re = re.compile(
+        r'(?<![\w.+-])([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})(?![\w.-])'
+    )
 
     def _heading_joiner(left, right):
         """Choose spacing when stitching fragmented heading text."""
@@ -301,6 +304,16 @@ def clean_apple_html(body, title=""):
         return bool(re.search(r"[a-z]", labels[-2], flags=re.IGNORECASE))
 
     def _linkify_plain_text_fragment(text):
+        email_tokens = {}
+
+        def _protect_email(match):
+            email = match.group(1)
+            token = f"__APPLE_NOTES_EMAIL_{len(email_tokens)}__"
+            email_tokens[token] = f'<a href="mailto:{email}">{email}</a>'
+            return token
+
+        text = email_text_re.sub(_protect_email, text)
+
         def _replace(match):
             candidate = match.group(1)
             if not _is_likely_web_url_or_domain(candidate):
@@ -308,7 +321,10 @@ def clean_apple_html(body, title=""):
             href = _href_from_text(candidate)
             return f'<a href="{href}">{candidate}</a>'
 
-        return inline_url_re.sub(_replace, text)
+        text = inline_url_re.sub(_replace, text)
+        for token, replacement in email_tokens.items():
+            text = text.replace(token, replacement)
+        return text
 
     def _linkify_inline_plaintext(html):
         parts = re.split(r'(<[^>]+>)', html)
@@ -341,6 +357,8 @@ def clean_apple_html(body, title=""):
     # Apple can emit malformed HTML entity fragments for quotes: "&quot" (no ';').
     # Normalise these early so downstream HTML->Markdown conversion yields '"'.
     body = re.sub(r'&quot(?!;)', '"', body, flags=re.IGNORECASE)
+    body = re.sub(r'&lt(?!;)', '&lt;', body, flags=re.IGNORECASE)
+    body = re.sub(r'&gt(?!;)', '&gt;', body, flags=re.IGNORECASE)
     body = re.sub(
         r'(</(?:b|i|u|em|strong)>)\s*\u00a0\s*(<(?:b|i|u|em|strong)[\s>])',
         r'\1<br>\n\2', body,
@@ -439,6 +457,32 @@ def clean_apple_html(body, title=""):
             '', body, count=1,
         )
 
+    protected_blocks = {}
+
+    def _protect_table_blocks(match):
+        token = f"__APPLE_NOTES_TABLE_BLOCK_{len(protected_blocks)}__"
+        table_html = match.group(1) if match.lastindex else match.group(0)
+        protected_blocks[token] = table_html
+        return token
+
+    body = re.sub(
+        r'<object>\s*(<table.*?</table>)\s*</object>',
+        _protect_table_blocks,
+        body,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    body = re.sub(
+        r'<table.*?</table>',
+        _protect_table_blocks,
+        body,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    body = re.sub(
+        r'<div>\s*(__APPLE_NOTES_TABLE_BLOCK_\d+__)\s*(?:<br\s*/?>)?\s*</div>',
+        r'\1',
+        body,
+    )
+
     # Merge consecutive divs into single blocks with <br> line breaks.
     # In Apple Notes, each Enter creates a new <div>; only an empty <div><br></div>
     # (or now <div></div> after br-stripping) signals a true paragraph break.
@@ -472,6 +516,7 @@ def clean_apple_html(body, title=""):
 
     # Unwrap divs that directly precede a list (keeps label tight with list)
     body = re.sub(r'<div>(.*?)</div>\n(<(?:ul|ol)[\s>])', r'\1\n\2', body, flags=re.DOTALL)
+    body = re.sub(r'<div>\s*(__APPLE_NOTES_TABLE_BLOCK_\d+__)\s*</div>', r'\1', body)
 
     # Convert remaining content <div>s to semantic <p>s
     body = re.sub(r'<div>(.*?)</div>', r'<p>\1</p>', body, flags=re.DOTALL)
@@ -510,6 +555,9 @@ def clean_apple_html(body, title=""):
 
     # Collapse excessive blank lines
     body = re.sub(r'\n{3,}', '\n\n', body)
+
+    for token, block_html in protected_blocks.items():
+        body = body.replace(token, block_html)
 
     return body.strip()
 
@@ -604,6 +652,31 @@ def to_markdown(title, created, modified, folder, html_body, *,
             markdown_text = markdown_text.replace(f"]({token})", f"]({data_uri})")
         return markdown_text
 
+    def _tokenize_tables(html_text):
+        table_tokens = {}
+
+        def _replace(match):
+            token = f"__APPLE_NOTES_MD_TABLE_{len(table_tokens)}__"
+            table_tokens[token] = match.group(0)
+            return token
+
+        tokenized = re.sub(
+            r'<table.*?</table>',
+            _replace,
+            html_text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        return tokenized, table_tokens
+
+    def _restore_tables(markdown_text, table_tokens):
+        for token, table_html in table_tokens.items():
+            markdown_text = markdown_text.replace(token, f'\n\n{table_html}\n\n')
+            markdown_text = markdown_text.replace(
+                token.replace('_', r'\_'),
+                f'\n\n{table_html}\n\n',
+            )
+        return markdown_text
+
     image_list = []
     if HAS_MARKDOWNIFY:
         md_opts = dict(
@@ -613,6 +686,8 @@ def to_markdown(title, created, modified, folder, html_body, *,
         )
         prepared_html = _preserve_line_indentation(html_body)
         inline_image_tokens = {}
+        table_tokens = {}
+        prepared_html, table_tokens = _tokenize_tables(prepared_html)
         if extract_images:
             md_opts.update(
                 extract_images=True,
@@ -638,6 +713,9 @@ def to_markdown(title, created, modified, folder, html_body, *,
         # section headings tightly with the following content, so keep the source
         # markdown compact here as well.
         body_md = re.sub(r'(^|\n)(#{2,6} [^\n]+)\n\n(?=\S)', r'\1\2\n', body_md)
+        body_md = re.sub(r'<(\[[^]]+\]\(mailto:[^)]+\))>', r'\1', body_md)
+        if table_tokens:
+            body_md = _restore_tables(body_md, table_tokens)
         if inline_image_tokens:
             body_md = _restore_inline_data_images(body_md, inline_image_tokens)
     else:
