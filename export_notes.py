@@ -695,7 +695,7 @@ def to_markdown(title, created, modified, folder, html_body, *,
             lower = inner.replace('\\', '').lower()
             if lower in html_tags:
                 return match.group(0)
-            return f'&lt;{inner}&gt;'
+            return f'\\<{inner}\\>'
 
         return re.sub(
             r'<([A-Za-z][A-Za-z0-9_\\-]*)>',
