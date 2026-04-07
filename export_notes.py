@@ -677,6 +677,32 @@ def to_markdown(title, created, modified, folder, html_body, *,
             )
         return markdown_text
 
+    def _escape_non_html_angle_placeholders(markdown_text):
+        html_tags = {
+            "a", "abbr", "acronym", "address", "article", "aside", "audio",
+            "b", "blockquote", "br", "button", "caption", "code", "col",
+            "colgroup", "dd", "del", "details", "div", "dl", "dt", "em",
+            "figcaption", "figure", "footer", "h1", "h2", "h3", "h4", "h5", "h6",
+            "head", "header", "hr", "html", "i", "iframe", "img", "input",
+            "label", "li", "main", "nav", "object", "ol", "p", "picture", "pre",
+            "q", "section", "small", "source", "span", "strong", "sub", "sup",
+            "summary", "table", "tbody", "td", "textarea", "tfoot", "th", "thead",
+            "time", "title", "tr", "u", "ul", "video",
+        }
+
+        def _replace(match):
+            inner = match.group(1)
+            lower = inner.replace('\\', '').lower()
+            if lower in html_tags:
+                return match.group(0)
+            return f'&lt;{inner}&gt;'
+
+        return re.sub(
+            r'<([A-Za-z][A-Za-z0-9_\\-]*)>',
+            _replace,
+            markdown_text,
+        )
+
     image_list = []
     if HAS_MARKDOWNIFY:
         md_opts = dict(
@@ -714,6 +740,7 @@ def to_markdown(title, created, modified, folder, html_body, *,
         # markdown compact here as well.
         body_md = re.sub(r'(^|\n)(#{2,6} [^\n]+)\n\n(?=\S)', r'\1\2\n', body_md)
         body_md = re.sub(r'<(\[[^]]+\]\(mailto:[^)]+\))>', r'\1', body_md)
+        body_md = _escape_non_html_angle_placeholders(body_md)
         if table_tokens:
             body_md = _restore_tables(body_md, table_tokens)
         if inline_image_tokens:
