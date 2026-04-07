@@ -223,6 +223,11 @@ def clean_apple_html(body, title=""):
             return text
         return f"https://{text}"
 
+    inline_url_re = re.compile(
+        rf'(?<![\w@/])({url_text_re.pattern})(?![\w/])',
+        flags=re.IGNORECASE,
+    )
+
     def _heading_joiner(left, right):
         """Choose spacing when stitching fragmented heading text."""
         if not left or not right:
@@ -293,6 +298,39 @@ def clean_apple_html(body, title=""):
         if tld not in common_tlds:
             return False
         return bool(re.search(r"[a-z]", labels[-2], flags=re.IGNORECASE))
+
+    def _linkify_plain_text_fragment(text):
+        def _replace(match):
+            candidate = match.group(1)
+            if not _is_likely_web_url_or_domain(candidate):
+                return candidate
+            href = _href_from_text(candidate)
+            return f'<a href="{href}">{candidate}</a>'
+
+        return inline_url_re.sub(_replace, text)
+
+    def _linkify_inline_plaintext(html):
+        parts = re.split(r'(<[^>]+>)', html)
+        out = []
+        in_anchor = False
+
+        for part in parts:
+            if not part:
+                continue
+            if part.startswith('<'):
+                if re.match(r'<a\b', part, flags=re.IGNORECASE):
+                    in_anchor = True
+                elif re.match(r'</a\b', part, flags=re.IGNORECASE):
+                    in_anchor = False
+                out.append(part)
+                continue
+
+            if in_anchor:
+                out.append(part)
+            else:
+                out.append(_linkify_plain_text_fragment(part))
+
+        return ''.join(out)
 
     # Handle Apple Notes Unicode line separators (U+2028) and associated NBSP
     # Apple uses U+2028 for within-paragraph line breaks; the HTML body sometimes
@@ -377,6 +415,19 @@ def clean_apple_html(body, title=""):
         _linkify_container_url,
         body,
         flags=re.IGNORECASE,
+    )
+
+    def _linkify_container_inline_urls(match):
+        open_tag = match.group(1)
+        inner_html = match.group(2)
+        close_tag = match.group(3)
+        return f'{open_tag}{_linkify_inline_plaintext(inner_html)}{close_tag}'
+
+    body = re.sub(
+        r'(<(?:li|p|div|span)\b[^>]*>)(.*?)(</(?:li|p|div|span)>)',
+        _linkify_container_inline_urls,
+        body,
+        flags=re.IGNORECASE | re.DOTALL,
     )
 
     # Remove duplicate leading title (Apple Notes repeats it in the body)
