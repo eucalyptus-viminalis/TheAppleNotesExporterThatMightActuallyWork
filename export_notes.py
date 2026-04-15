@@ -7,19 +7,19 @@ macOS only — requires Notes.app (macOS 10.15 Catalina or later).
 Exports all Apple Notes to HTML and/or Markdown, preserving folder structure.
 
 Requirements (install once):
-    pip install markdownify
+    pip3 install markdownify
 
 Usage:
-    python export_notes.py                        # export both HTML + Markdown
-    python export_notes.py --format html          # HTML only
-    python export_notes.py --format md            # Markdown only
-    python export_notes.py --out ~/Desktop/Notes  # custom output directory
-    python export_notes.py --folder "Work"        # only one folder
-    python export_notes.py --dry-run              # preview without writing files
-    python export_notes.py --no-frontmatter       # omit YAML front matter
-    python export_notes.py --no-title             # omit # Title heading
-    python export_notes.py --extract-images       # extract images, use ![](path) links
-    python export_notes.py --obsidian-images      # extract images, use ![[]] links
+    python3 export_notes.py                        # export both HTML + Markdown
+    python3 export_notes.py --format html          # HTML only
+    python3 export_notes.py --format md            # Markdown only
+    python3 export_notes.py --out ~/Desktop/Notes  # custom output directory
+    python3 export_notes.py --folder "Work"        # folder and nested subfolders
+    python3 export_notes.py --dry-run              # preview without writing files
+    python3 export_notes.py --no-frontmatter       # omit YAML front matter
+    python3 export_notes.py --no-title             # omit # Title heading
+    python3 export_notes.py --extract-images       # extract images, use ![](path) links
+    python3 export_notes.py --obsidian-images      # extract images, use ![[]] links
 
 On first run macOS will ask permission for Terminal to control Notes.app — click OK.
 """
@@ -129,32 +129,81 @@ def _as_escape(value):
 
 
 def build_applescript(folder_filter):
+    helpers = """
+on folderPathFor(aFolder)
+    set pathParts to {}
+    set currentFolder to aFolder
+    repeat
+        tell application "Notes"
+            set beginning of pathParts to (name of currentFolder)
+            try
+                set parentRef to (container of currentFolder)
+                if class of parentRef is account then exit repeat
+                set currentFolder to parentRef
+            on error
+                exit repeat
+            end try
+        end tell
+    end repeat
+    return my joinList(pathParts, "/")
+end folderPathFor
+
+on joinList(theItems, theDelimiter)
+    set oldDelims to AppleScript's text item delimiters
+    set AppleScript's text item delimiters to theDelimiter
+    set joinedText to theItems as text
+    set AppleScript's text item delimiters to oldDelims
+    return joinedText
+end joinList
+"""
+
     if folder_filter:
-        folder_clause = f'set allFolders to (every folder whose name is "{_as_escape(folder_filter)}")'
-    else:
-        folder_clause = "set allFolders to every folder"
-
-    return f"""
-use AppleScript version "2.4"
-use scripting additions
-
-set fieldSep to "{FIELD_SEP}"
-set noteSep to "{NOTE_SEP}"
-set output to ""
-
-tell application "Notes"
-    {folder_clause}
+        escaped_filter = _as_escape(folder_filter)
+        loop_body = f"""
+    set filterRoot to "{escaped_filter}"
+    set filterPrefix to filterRoot & "/"
     repeat with aFolder in allFolders
-        set folderName to name of aFolder
+        set folderPath to my folderPathFor(aFolder)
+        if folderPath is filterRoot or folderPath starts with filterPrefix then
+            set folderNotes to every note in aFolder
+            repeat with aNote in folderNotes
+                set noteTitle to name of aNote
+                set noteBody to body of aNote
+                set noteCreated to creation date of aNote as string
+                set noteModified to modification date of aNote as string
+                set output to output & folderPath & fieldSep & noteTitle & fieldSep & noteCreated & fieldSep & noteModified & fieldSep & noteBody & noteSep
+            end repeat
+        end if
+    end repeat
+"""
+    else:
+        loop_body = """
+    repeat with aFolder in allFolders
+        set folderPath to my folderPathFor(aFolder)
         set folderNotes to every note in aFolder
         repeat with aNote in folderNotes
             set noteTitle to name of aNote
             set noteBody to body of aNote
             set noteCreated to creation date of aNote as string
             set noteModified to modification date of aNote as string
-            set output to output & folderName & fieldSep & noteTitle & fieldSep & noteCreated & fieldSep & noteModified & fieldSep & noteBody & noteSep
+            set output to output & folderPath & fieldSep & noteTitle & fieldSep & noteCreated & fieldSep & noteModified & fieldSep & noteBody & noteSep
         end repeat
     end repeat
+"""
+
+    return f"""
+use AppleScript version "2.4"
+use scripting additions
+
+{helpers}
+
+set fieldSep to "{FIELD_SEP}"
+set noteSep to "{NOTE_SEP}"
+set output to ""
+
+tell application "Notes"
+    set allFolders to every folder
+{loop_body}
 end tell
 return output
 """
@@ -200,11 +249,30 @@ def parse_notes(raw):
     return notes
 
 
+def filter_notes_by_folder(notes, folder_filter=None):
+    if not folder_filter:
+        return notes
+
+    prefix = folder_filter + "/"
+    return [
+        note for note in notes
+        if note["folder"] == folder_filter or note["folder"].startswith(prefix)
+    ]
+
+
 # ── Sanitise a string so it's safe to use as a filename ─────────────────────
 def safe_filename(name, max_len=80):
     name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name)
     name = name.strip(". ")
     return name[:max_len] or "untitled"
+
+
+def folder_output_dir(out_dir, fmt, folder_path):
+    folder_dir = out_dir / fmt
+    parts = [safe_filename(part) for part in folder_path.split("/") if part.strip()]
+    for part in parts:
+        folder_dir /= part
+    return folder_dir
 
 
 # ── Clean up Apple Notes HTML quirks ─────────────────────────────────────────
@@ -820,7 +888,7 @@ def unique_name(used_set, name):
 def write_note(note, out_dir, fmt, used_names, *,
                include_frontmatter=True, include_title=True,
                extract_images=False, obsidian_images=False, image_names=None):
-    folder_dir = out_dir / fmt / safe_filename(note["folder"])
+    folder_dir = folder_output_dir(out_dir, fmt, note["folder"])
     folder_dir.mkdir(parents=True, exist_ok=True)
 
     base = safe_filename(note["title"])
@@ -874,7 +942,7 @@ def main():
     )
     parser.add_argument(
         "--folder", default=None,
-        help="Only export notes from this folder name",
+        help="Export notes from this folder and nested subfolders",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -909,7 +977,7 @@ def main():
     # ── Warn if markdownify is missing and Markdown is requested ────────────
     if "md" in formats and not HAS_MARKDOWNIFY:
         print("⚠️  markdownify not found — Markdown export will use plain-text fallback.")
-        print("   For better results: pip install markdownify\n")
+        print("   For better results: pip3 install markdownify\n")
 
     print("📓 Fetching notes from Notes.app…")
     if args.folder:
