@@ -448,6 +448,10 @@ def clean_apple_html(body, title=""):
     body = re.sub(r'&quot(?!;)', '"', body, flags=re.IGNORECASE)
     body = re.sub(r'&lt(?!;)', '&lt;', body, flags=re.IGNORECASE)
     body = re.sub(r'&gt(?!;)', '&gt;', body, flags=re.IGNORECASE)
+    # Bare "&#" not starting a valid numeric char reference confuses html.parser:
+    # it swallows following content (e.g. </a>) as part of a broken reference.
+    # Apple Notes emits this for tracker-style URLs ending in "&#".
+    body = re.sub(r'&#(?![0-9xX])', '&amp;#', body)
     body = re.sub(
         r'(</(?:b|i|u|em|strong)>)\s*\u00a0\s*(<(?:b|i|u|em|strong)[\s>])',
         r'\1<br>\n\2', body,
