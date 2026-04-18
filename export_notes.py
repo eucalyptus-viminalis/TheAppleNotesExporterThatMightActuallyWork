@@ -448,6 +448,10 @@ def clean_apple_html(body, title=""):
     body = re.sub(r'&quot(?!;)', '"', body, flags=re.IGNORECASE)
     body = re.sub(r'&lt(?!;)', '&lt;', body, flags=re.IGNORECASE)
     body = re.sub(r'&gt(?!;)', '&gt;', body, flags=re.IGNORECASE)
+    # Notes can emit "&amp" without ';' directly attached to content
+    # (e.g. "DS&ampA"). Normalise that compact form without touching spaced
+    # text like "&amp effects" that existing snapshots currently preserve.
+    body = re.sub(r'&amp(?!;)(?=[A-Za-z0-9])', '&amp;', body, flags=re.IGNORECASE)
     # Bare "&#" not starting a valid numeric char reference confuses html.parser:
     # it swallows following content (e.g. </a>) as part of a broken reference.
     # Apple Notes emits this for tracker-style URLs ending in "&#".
